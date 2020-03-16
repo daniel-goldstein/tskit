@@ -38,6 +38,7 @@ import attr
 import numpy as np
 
 import _tskit
+import tskit.combinatorics as combinatorics
 import tskit.drawing as drawing
 import tskit.exceptions as exceptions
 import tskit.formats as formats
@@ -800,6 +801,36 @@ class Tree:
         self.first()
         while self.interval[1] <= position:
             self.next()
+
+    def rank(self):
+        """
+        Produce the rank of this tree in the enumeration of all leaf-labelled
+        trees of n leaves. The order of children under a node or the labels of
+        internal nodes do not impact uniqueness or the rank of a given tree.
+
+        The resulting rank is a tuple. The first element is the rank of this
+        tree in the enumeration of all unlabelled trees of n leaves.
+        The second element is the rank in the enumeration of all possible
+        labellings of a tree of this shape.
+
+        :rtype: tuple(int)
+        :raises ValueError: If the tree has multiple roots.
+        """
+        return combinatorics.rank(self)
+
+    @staticmethod
+    def unrank(rank, num_leaves):
+        """
+        Reconstruct the tree of the given ``rank``
+        (see :func: `tskit.Tree.rank`) with ``num_leaves`` leaves.
+        The labels and times of internal nodes are chosen arbitrarily, and
+        the times of each leaf is 0.
+
+        :param tuple(int) rank: The rank of the tree to generate.
+        :param int num_leaves: The number of leaves of the tree to generate.
+        :rtype: Tree
+        """
+        return combinatorics.unrank(rank, num_leaves)
 
     def get_branch_length(self, u):
         # Deprecated alias for branch_length
