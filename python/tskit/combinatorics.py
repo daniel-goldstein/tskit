@@ -25,9 +25,155 @@ Module for ranking and unranking trees. Trees are considered only
 leaf-labelled and unordered, so order of children does not influence equality.
 """
 import heapq
+import itertools
+from collections import Counter
+from collections import defaultdict
 from functools import lru_cache
 
 import tskit
+
+
+def prod(*iterable):
+    total = 1
+    for x in iterable:
+        total *= x
+    return total
+
+
+def disjoint(*iterable):
+    return len(frozenset.union(*iterable)) == sum(len(s) for s in iterable)
+
+
+def count_topologies(tree, key=None):
+    """
+    Let T = T_l ^ T_r. Let P be the number of populations
+    in T and P_l and P_r be the number of populations in
+    T_l and T_r, respectively.
+
+    We want to find D_x, the distribution of trees
+    that arise from selecting samples from both T_l and T_r.
+    To do this, let's say that we're going to pick red from
+    T_l and green & blue from T_r. To find the number of
+    topologies that match this, we take all topologies with
+    red from T_l and combine them with all topologies of green & blue
+    from T_r. We merge the trees and multiply their counts.
+
+    I think this "for free" also tracks the sub-topologies. So if we
+    do this for 4 populations, it will also compute it for 3 populations
+    and 2. These shouldn't be much of a burden to memory bc, they are
+    exponentially smaller. There's only so many ways to do it for 2...
+    """
+    if key is None:
+
+        def pop_key(u):
+            return tree.tree_sequence.node(u).population
+
+        phylo = PhyloTree.from_tsk_tree(tree, pop_key)
+    else:
+        phylo = PhyloTree.from_tsk_tree(tree, key)
+    return phylo.topologies
+
+
+class PhyloTree:
+    """
+    A TopologyDist is a { {labels} -> Counter }
+    """
+
+    def __init__(self, children, label=None):
+        self.children = children
+        if len(children) == 0:
+            assert label is not None
+        self.label = label
+
+        self.topologies = self._topologies()
+
+    def _topologies(self):
+        if self.is_leaf():
+            rank_tree = RankTree(label=self.label)
+            labels = frozenset([self.label])
+            return {labels: Counter({rank_tree.rank(): 1})}
+
+        topologies = defaultdict(Counter)
+
+        # FragmentedTree is a: { {labels} -> Counter }
+        # potentials is a { {all labels} -> [FragmentedTree] }
+        potentials = defaultdict(list)
+        for child in self.children:
+            child_potentials = defaultdict(list)
+            for labels, counter in child.topologies.items():
+                for existing_label_set in potentials:
+                    if disjoint(labels, existing_label_set):
+                        union = frozenset.union(existing_label_set, labels)
+                        existing_topologies = potentials[existing_label_set]
+                        child_potentials[union].extend(
+                            PhyloTree.merge_topologies(
+                                labels, counter, existing_topologies
+                            )
+                        )
+
+            for k, v in child_potentials.items():
+                potentials[k].extend(v)
+
+            for labels, counter in child.topologies.items():
+                dic = defaultdict(Counter)
+                dic[labels] = counter
+                potentials[labels].append(dic)
+
+        for labels, list_of_topos in potentials.items():
+            for fragmented in list_of_topos:  # fragmented is a TopologyDist
+                children_labels = list(fragmented.keys())
+                # Must have at least 2 children nodes
+                if len(children_labels) > 1:
+                    assert disjoint(*children_labels)
+                    counters = [fragmented[labs] for labs in children_labels]
+                    counter_items = (c.items() for c in counters)
+                    for child_items in itertools.product(*counter_items):
+                        ranks = [rank for rank, _ in child_items]
+                        counts = [count for _, count in child_items]
+                        children = [
+                            RankTree.unrank(r, len(l), list(sorted(l)))
+                            for r, l in zip(ranks, children_labels)
+                        ]
+                        sorted_children = list(
+                            sorted(children, key=RankTree.canonical_order)
+                        )
+                        tree = RankTree(children=sorted_children)
+                        topologies[labels][tree.rank()] += prod(*counts)
+                else:
+                    labels = children_labels[0]
+                    for rank, count in fragmented[labels].items():
+                        topologies[labels][rank] += count
+
+        return topologies
+
+    # existing_topologies is a [TopologyDist]
+    @staticmethod
+    def merge_topologies(labels, counter, existing_topologies):
+        result = []
+        for topo_dict in existing_topologies:
+            new_dict = defaultdict(Counter)
+            new_dict.update(topo_dict)
+            new_dict[labels] = counter
+            result.append(new_dict)
+
+        return result
+
+    def taxa(self):
+        return frozenset.union(*self.topologies.keys())
+
+    def is_leaf(self):
+        return len(self.children) == 0
+
+    @staticmethod
+    def from_tsk_tree(tree, key=None, u=None):
+        if u is None:
+            u = tree.root
+
+        if tree.is_leaf(u):
+            return PhyloTree([], label=key(u))
+
+        children = [PhyloTree.from_tsk_tree(tree, key, c) for c in tree.children(u)]
+        return PhyloTree(children=children)
 
 
 def rank(tree):
@@ -226,10 +372,10 @@ class RankTree:
         return self._label_rank
 
     @staticmethod
-    def unrank(rank, num_leaves):
+    def unrank(rank, num_leaves, labels=None):
         shape_rank, label_rank = rank
         unlabelled = RankTree.shape_unrank(shape_rank, num_leaves)
-        return unlabelled.label_unrank(label_rank)
+        return unlabelled.label_unrank(label_rank, labels)
 
     @staticmethod
     def shape_unrank(shape_rank, n):
@@ -309,13 +455,14 @@ class RankTree:
     def to_tsk_tree(self):
         seq_length = 1
         tables = tskit.TableCollection(seq_length)
+        leaves = set(self.labels)
 
-        def add_node(node):
+        def add_edges(node):
             if node.is_leaf():
                 assert node.label is not None
                 return node.label
 
-            child_ids = [add_node(child) for child in node.children]
+            child_ids = [add_edges(child) for child in node.children]
             # Arbitrarily set parent time +1 from their oldest child
             max_child_time = max(tables.nodes.time[c] for c in child_ids)
             parent_id = tables.nodes.add_row(time=max_child_time + 1)
@@ -324,14 +471,19 @@ class RankTree:
 
             return parent_id
 
-        for _ in range(self.num_leaves):
-            tables.nodes.add_row(flags=tskit.NODE_IS_SAMPLE, time=0)
-        add_node(self)
+        # FIXME How can I insert nodes properly?
+        for i in range(self.num_nodes()):
+            flags = tskit.NODE_IS_SAMPLE if i in leaves else 0
+            tables.nodes.add_row(flags=flags, time=0)
+        add_edges(self)
 
         # Have to sort for now because the of the first way
         # in which we're traversing the edges
         tables.sort()
         return tables.tree_sequence().first()
+
+    def num_nodes(self):
+        return 1 + sum(c.num_nodes() for c in self.children)
 
     def newick(self):
         if self.is_leaf():
