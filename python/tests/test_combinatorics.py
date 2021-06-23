@@ -597,6 +597,44 @@ class TestPartialTopologyCounter:
         actual_topology = comb.PartialTopologyCounter.join_topologies(topologies)
         assert actual_topology == expected_topology
 
+    def test_topology_counter_dict_iteration(self):
+        """
+        1st shape rank and 0th labelling of 3 leaves should produce
+        ┏━┻┓
+        ┃  ┃
+        ┃ ┏┻┓
+        0 1 2
+        """
+        t = tskit.Tree.unrank(3, (1, 0))
+        expected_topologies_per_species_combination = {
+            (0,): {(0, 0): 1},
+            (1,): {(0, 0): 1},
+            (2,): {(0, 0): 1},
+            (0, 1): {(0, 0): 1},
+            (0, 2): {(0, 0): 1},
+            (1, 2): {(0, 0): 1},
+            (0, 1, 2): {(1, 0): 1},
+        }
+        topology_counter = t.count_topologies(sample_sets=[[0], [1], [2]])
+        assert set(expected_topologies_per_species_combination.keys()) == set(
+            iter(topology_counter)
+        )
+        assert set(expected_topologies_per_species_combination.keys()) == set(
+            topology_counter.keys()
+        )
+
+        expected_values = tuple(
+            sorted(
+                expected_topologies_per_species_combination.values(),
+                key=lambda d: list(d.keys()),
+            )
+        )
+        values = tuple(sorted(topology_counter.values(), key=lambda d: list(d.keys())))
+        assert expected_values == values
+
+        for species, topologies in topology_counter.items():
+            assert expected_topologies_per_species_combination[species] == topologies
+
 
 class TestCountTopologies:
     def verify_topologies(self, ts, sample_sets=None, expected=None):

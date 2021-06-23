@@ -910,6 +910,13 @@ class Tree:
         ``topology_counter[0, 1, ..., n]`` should sum to
         :math:`|s_0| * |s_1| * ... * |s_n|`.
 
+        The topology distributions for each combination of sample sets can be
+        iterated through similarly to a Python dictionary:
+
+        >>> for sample_sets, topologies in tree.count_topologies().items():
+        >>>     print(f'The topology distribution for the subset of sample sets '
+        >>>           f'{sample_sets} is {topologies}')
+
         To convert the topology counts to probabilities, divide by the total
         possible number of sample combinations from the sample sets in question::
 

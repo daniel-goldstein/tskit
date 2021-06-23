@@ -523,6 +523,18 @@ class TopologyCounter:
         k = TopologyCounter._to_key(sample_set_indexes)
         self.topologies[k] = counter
 
+    def __iter__(self):
+        return iter(self.topologies)
+
+    def keys(self):
+        return self.topologies.keys()
+
+    def values(self):
+        return self.topologies.values()
+
+    def items(self):
+        return self.topologies.items()
+
     @staticmethod
     def _to_key(sample_set_indexes):
         if not isinstance(sample_set_indexes, collections.abc.Iterable):
